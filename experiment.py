@@ -65,4 +65,4 @@ def run_experiment(model_pipeline, model_name):
 
 # 3. Run the experiment on both models
 acc_1, time_1 = run_experiment(model_1, "ResNet-50 (hanslab37)")
-acc_2, time_2 = run_experiment(model_2, "ResNet-18 (cringgaard)")
+acc_2, time_2 = run_experiment(model_2, "google")

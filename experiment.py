@@ -6,7 +6,7 @@ from transformers import pipeline
 # 1. Setup Models
 print("Loading models...")
 model_1 = pipeline("image-classification", model="hanslab37/architectural-classifier-resnet-50")
-model_2 = pipeline("image-classification", model="cringgaard/ResNet18_Construction_baseline")
+model_2 = pipeline("image-classification", model="google/vit-base-patch16-224")
 
 # 2. Define your Ground Truth (The "Answer Key")
 # Replace these with your actual test image filenames and their true labels

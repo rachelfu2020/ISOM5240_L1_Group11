@@ -158,8 +158,19 @@ def main():
                     # ... (The rest of your code for zipping and Excel stays exactly the same!) ...
 
                 # Save the new PDFs to memory
-                drawing_pdf_bytes = drawing_doc.write()
-                non_drawing_pdf_bytes = non_drawing_doc.write()
+                # drawing_pdf_bytes = drawing_doc.write()
+                # non_drawing_pdf_bytes = non_drawing_doc.write()
+
+                # Save the new PDFs to memory (ONLY if they contain pages)
+                        if drawing_count > 0:
+                            drawing_pdf_bytes = drawing_doc.write()
+                        else:
+                            drawing_pdf_bytes = None
+                            
+                        if non_drawing_count > 0:
+                            non_drawing_pdf_bytes = non_drawing_doc.write()
+                        else:
+                            non_drawing_pdf_bytes = None
                 
                 drawing_doc.close()
                 non_drawing_doc.close()

@@ -1,3 +1,8 @@
 streamlit
 transformers
 torch
+pymupdf
+pandas
+openpyxl
+requests
+pillow

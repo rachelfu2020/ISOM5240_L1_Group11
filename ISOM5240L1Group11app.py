@@ -55,7 +55,6 @@ from PIL import Image
 # Cache the model so it only loads once into memory
 @st.cache_resource
 def load_classifier():
-    st.toast("Loading AI Model into memory... this might take a second.")
     # Using your specific Hugging Face model
     return pipeline("image-classification", model="hanslab37/architectural-classifier-resnet-50")
 

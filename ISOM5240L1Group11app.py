@@ -364,10 +364,10 @@ def process_single_pdf(pdf_path, filename, base_dir, model, device, quote_placeh
             
             # --- UPDATED: Sequential Quote Logic ---
             current_time = time.time()
-            if current_time - state_tracker['last_quote_time'] > 3.0:
+            if current_time - state_tracker['last_quote_time'] > 5.0:
                 # Get the current quote using the index
                 current_quote_idx = state_tracker['quote_index']
-                quote_placeholder.markdown(f"#### {FUNNY_QUOTES[current_quote_idx]}")
+                quote_placeholder.markdown(f"##### {FUNNY_QUOTES[current_quote_idx]}")
                 
                 # Update the timer and move to the next quote (looping back to 0 if at the end)
                 state_tracker['last_quote_time'] = current_time

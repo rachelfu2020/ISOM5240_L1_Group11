@@ -10,3 +10,4 @@ Pillow
 pdf2image
 pypdf
 numpy
+xlsxwriter

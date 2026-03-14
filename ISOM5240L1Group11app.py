@@ -421,7 +421,7 @@ if uploaded_pdfs:
 
     if valid_files:
         st.success(f"✅ {len(valid_files)} file(s) ready for processing.")
-        with st.expander("Review and Manage Uploaded Files", expanded=True):
+        with st.expander("Review and Manage Uploaded Files", expanded=False):
             for pdf in valid_files:
                 col1, col2 = st.columns([0.8, 0.2])
                 col1.write(f"📄 {pdf.name}")

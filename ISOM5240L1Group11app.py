@@ -237,7 +237,6 @@ import gc
 import tempfile
 import shutil
 import time
-import random
 import streamlit as st
 import torch
 import torch.nn as nn
@@ -277,7 +276,7 @@ IMAGE_TRANSFORMS = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-# --- NEW: Funny Quotes List ---
+# --- Funny Quotes List ---
 FUNNY_QUOTES = [
     "🛌 喺邊度跌倒，就喺邊度攤唞下！",
     "😌 努力唔一定會成功，但唔努力一定會好舒服。",
@@ -353,7 +352,6 @@ def process_and_save_page(pdf_page, pred_class, base_dir, base_name, page_num):
     return target_folder_name, out_pdf_name
 
 
-# UPDATED: Added quote_placeholder and a dictionary to track time
 def process_single_pdf(pdf_path, filename, base_dir, model, device, quote_placeholder, state_tracker):
     base_name = os.path.splitext(filename)[0]
     results = []
@@ -364,12 +362,16 @@ def process_single_pdf(pdf_path, filename, base_dir, model, device, quote_placeh
 
         for batch_start_page in range(1, total_pages + 1, BATCH_SIZE):
             
-            # --- Quote Timer Logic ---
+            # --- UPDATED: Sequential Quote Logic ---
             current_time = time.time()
-            # If 3 seconds have passed since the last quote, update it!
             if current_time - state_tracker['last_quote_time'] > 3.0:
-                quote_placeholder.markdown(f"#### {random.choice(FUNNY_QUOTES)}")
+                # Get the current quote using the index
+                current_quote_idx = state_tracker['quote_index']
+                quote_placeholder.markdown(f"#### {FUNNY_QUOTES[current_quote_idx]}")
+                
+                # Update the timer and move to the next quote (looping back to 0 if at the end)
                 state_tracker['last_quote_time'] = current_time
+                state_tracker['quote_index'] = (current_quote_idx + 1) % len(FUNNY_QUOTES)
 
             batch_end_page = min(batch_start_page + BATCH_SIZE - 1, total_pages)
             
@@ -437,7 +439,9 @@ if uploaded_pdfs:
 
     if valid_files:
         st.success(f"✅ {len(valid_files)} file(s) ready for processing.")
-        with st.expander("Review and Manage Uploaded Files", expanded=True):
+        
+        # UPDATED: Set expanded=False so it is collapsed by default
+        with st.expander("Review and Manage Uploaded Files", expanded=False):
             for pdf in valid_files:
                 col1, col2 = st.columns([0.8, 0.2])
                 col1.write(f"📄 {pdf.name}")
@@ -460,15 +464,17 @@ if st.button("Classify and Sort PDFs"):
             setup_directories(output_dir)
             all_results = []
             
-            # --- NEW UI Elements for Processing ---
             st.divider()
             quote_placeholder = st.empty()
-            quote_placeholder.markdown(f"#### {random.choice(FUNNY_QUOTES)}") # Show first quote immediately
+            
+            # Show the first quote immediately and set the tracker to start at index 1 for the next loop
+            quote_placeholder.markdown(f"#### {FUNNY_QUOTES[0]}")
+            state_tracker = {
+                'last_quote_time': time.time(),
+                'quote_index': 1 
+            }
             
             progress_bar = st.progress(0)
-            
-            # Tracker to keep the quote timing continuous across multiple files
-            state_tracker = {'last_quote_time': time.time()}
             
             for idx, uploaded_pdf in enumerate(valid_files):
                 temp_pdf_path = os.path.join(input_dir, uploaded_pdf.name)
@@ -483,7 +489,6 @@ if st.button("Classify and Sort PDFs"):
                 progress_bar.progress((idx + 1) / len(valid_files))
 
             if all_results:
-                # Clear the quote when done!
                 quote_placeholder.empty() 
                 
                 df = pd.DataFrame(all_results)

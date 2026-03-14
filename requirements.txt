@@ -6,4 +6,7 @@ pymupdf
 pandas
 openpyxl
 requests
-pillow
+Pillow
+pdf2image
+pypdf
+numpy

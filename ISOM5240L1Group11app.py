@@ -352,7 +352,7 @@ def process_and_save_page(pdf_page, pred_class, base_dir, base_name, page_num):
     return target_folder_name, out_pdf_name
 
 
-def process_single_pdf(pdf_path, filename, base_dir, model, device, quote_placeholder, state_tracker):
+def process_single_pdf(pdf_path, filename, base_dir, model, device, log_placeholder, state_tracker):
     base_name = os.path.splitext(filename)[0]
     results = []
 
@@ -362,14 +362,12 @@ def process_single_pdf(pdf_path, filename, base_dir, model, device, quote_placeh
 
         for batch_start_page in range(1, total_pages + 1, BATCH_SIZE):
             
-            # --- UPDATED: Sequential Quote Logic ---
+            # --- Sequential Quote Logic using original placeholder ---
             current_time = time.time()
             if current_time - state_tracker['last_quote_time'] > 5.0:
-                # Get the current quote using the index
                 current_quote_idx = state_tracker['quote_index']
-                quote_placeholder.markdown(f"##### {FUNNY_QUOTES[current_quote_idx]}")
+                log_placeholder.info(FUNNY_QUOTES[current_quote_idx])
                 
-                # Update the timer and move to the next quote (looping back to 0 if at the end)
                 state_tracker['last_quote_time'] = current_time
                 state_tracker['quote_index'] = (current_quote_idx + 1) % len(FUNNY_QUOTES)
 
@@ -440,7 +438,6 @@ if uploaded_pdfs:
     if valid_files:
         st.success(f"✅ {len(valid_files)} file(s) ready for processing.")
         
-        # UPDATED: Set expanded=False so it is collapsed by default
         with st.expander("Review and Manage Uploaded Files", expanded=False):
             for pdf in valid_files:
                 col1, col2 = st.columns([0.8, 0.2])
@@ -464,11 +461,11 @@ if st.button("Classify and Sort PDFs"):
             setup_directories(output_dir)
             all_results = []
             
-            st.divider()
-            quote_placeholder = st.empty()
+            # --- Clean UI Elements for Processing ---
+            log_placeholder = st.empty()
             
-            # Show the first quote immediately and set the tracker to start at index 1 for the next loop
-            quote_placeholder.markdown(f"#### {FUNNY_QUOTES[0]}")
+            # Show the first quote immediately and set the tracker
+            log_placeholder.info(FUNNY_QUOTES[0])
             state_tracker = {
                 'last_quote_time': time.time(),
                 'quote_index': 1 
@@ -482,14 +479,14 @@ if st.button("Classify and Sort PDFs"):
                     f.write(uploaded_pdf.getbuffer())
                 
                 file_results = process_single_pdf(
-                    temp_pdf_path, uploaded_pdf.name, output_dir, model, device, quote_placeholder, state_tracker
+                    temp_pdf_path, uploaded_pdf.name, output_dir, model, device, log_placeholder, state_tracker
                 )
                 all_results.extend(file_results)
                 
                 progress_bar.progress((idx + 1) / len(valid_files))
 
             if all_results:
-                quote_placeholder.empty() 
+                log_placeholder.success("🎉 Classification complete! Generating report...")
                 
                 df = pd.DataFrame(all_results)
                 columns_order = ["Folder Name", "File Name", "Page Number", "Prediction", "Confidence (%)"]
@@ -515,7 +512,6 @@ if st.button("Classify and Sort PDFs"):
                 shutil.make_archive(zip_base_path, 'zip', output_dir)
                 zip_file_path = f"{zip_base_path}.zip"
 
-                st.success("🎉 All files processed and sorted successfully!")
                 with open(zip_file_path, "rb") as f:
                     st.download_button(
                         label="⬇️ Download Sorted PDFs and Excel Report",
@@ -524,4 +520,4 @@ if st.button("Classify and Sort PDFs"):
                         mime="application/zip"
                     )
             else:
-                quote_placeholder.error("No pages were successfully processed.")
+                log_placeholder.error("No pages were successfully processed.")

@@ -236,6 +236,8 @@ import os
 import gc
 import tempfile
 import shutil
+import time
+import random
 import streamlit as st
 import torch
 import torch.nn as nn
@@ -248,11 +250,10 @@ import numpy as np
 from pypdf import PdfReader, PdfWriter
 
 # --- Configuration & Mappings ---
-BATCH_SIZE = 8  # Safe for Streamlit Free Tier
+BATCH_SIZE = 8  
 
 CLASS_NAMES = ['drawings_0', 'drawings_180', 'drawings_270', 'drawings_90', 'non_drawings']
 
-# UPDATED: Changed folder names
 FOLDER_MAPPING = {
     'drawings_0': 'drawings',
     'drawings_90': 'drawings',
@@ -276,6 +277,19 @@ IMAGE_TRANSFORMS = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
+# --- NEW: Funny Quotes List ---
+FUNNY_QUOTES = [
+    "🛌 喺邊度跌倒，就喺邊度攤唞下！",
+    "😌 努力唔一定會成功，但唔努力一定會好舒服。",
+    "🛡️ 只要我夠廢，就冇人可以利用到我。",
+    "🐟 做人如果冇夢想，就可以無憂無慮。",
+    "🤦‍♂️ 今日解決唔到嘅事唔緊要，因為聽日你都一樣係解決唔到。",
+    "🐢 搏一搏，單車變摩托；縮一縮，舒舒服服。",
+    "🧘‍♂️ 與其提升自己，不如接受自己。",
+    "🥲 趁後生捱多啲苦，咁你大個嘅時候就可以再捱多啲苦。",
+    "🦥 聽日嘅事聽日先算，聽日搞唔掂都仲有後日。"
+]
+
 
 # --- Streamlit Caching ---
 @st.cache_resource
@@ -291,8 +305,6 @@ def load_cached_model(model_path):
 
 
 def setup_directories(base_dir):
-    """Creates output directories inside the designated output folder."""
-    # UPDATED: Changed folder names
     drawings_dir = os.path.join(base_dir, 'drawings')
     non_drawings_dir = os.path.join(base_dir, 'non_drawings')
     os.makedirs(drawings_dir, exist_ok=True)
@@ -341,16 +353,24 @@ def process_and_save_page(pdf_page, pred_class, base_dir, base_name, page_num):
     return target_folder_name, out_pdf_name
 
 
-def process_single_pdf(pdf_path, filename, base_dir, model, device, log_placeholder):
+# UPDATED: Added quote_placeholder and a dictionary to track time
+def process_single_pdf(pdf_path, filename, base_dir, model, device, quote_placeholder, state_tracker):
     base_name = os.path.splitext(filename)[0]
     results = []
 
     try:
         pdf_reader = PdfReader(pdf_path)
         total_pages = len(pdf_reader.pages)
-        log_placeholder.info(f"Processing '{filename}' ({total_pages} pages)...")
 
         for batch_start_page in range(1, total_pages + 1, BATCH_SIZE):
+            
+            # --- Quote Timer Logic ---
+            current_time = time.time()
+            # If 3 seconds have passed since the last quote, update it!
+            if current_time - state_tracker['last_quote_time'] > 3.0:
+                quote_placeholder.markdown(f"#### {random.choice(FUNNY_QUOTES)}")
+                state_tracker['last_quote_time'] = current_time
+
             batch_end_page = min(batch_start_page + BATCH_SIZE - 1, total_pages)
             
             batch_images = convert_from_path(
@@ -382,7 +402,7 @@ def process_single_pdf(pdf_path, filename, base_dir, model, device, log_placehol
             gc.collect()
 
     except Exception as e:
-        log_placeholder.error(f"Error processing {filename}: {e}")
+        st.error(f"Error processing {filename}: {e}")
 
     return results
 
@@ -390,7 +410,6 @@ def process_single_pdf(pdf_path, filename, base_dir, model, device, log_placehol
 # --- Streamlit UI & Session State ---
 st.set_page_config(page_title="Drawing Classifier App", layout="centered")
 
-# Initialize an ignore list in session state for our custom remove buttons
 if "ignored_files" not in st.session_state:
     st.session_state.ignored_files = []
 
@@ -406,29 +425,25 @@ if not os.path.exists(MODEL_PATH):
 with st.spinner("Loading AI Model..."):
     model, device = load_cached_model(MODEL_PATH)
 
-# File Uploader
 uploaded_pdfs = st.file_uploader("Upload PDF Files", type=["pdf"], accept_multiple_files=True)
 
 valid_files = []
 
 if uploaded_pdfs:
-    # Cleanup session state: if a user clears the uploader completely, clear the ignore list
     current_upload_names = [f.name for f in uploaded_pdfs]
     st.session_state.ignored_files = [f for f in st.session_state.ignored_files if f in current_upload_names]
     
-    # Filter the uploaded files to exclude anything the user clicked "Remove" on
     valid_files = [f for f in uploaded_pdfs if f.name not in st.session_state.ignored_files]
 
     if valid_files:
         st.success(f"✅ {len(valid_files)} file(s) ready for processing.")
-        with st.expander("Review and Manage Uploaded Files", expanded=False):
+        with st.expander("Review and Manage Uploaded Files", expanded=True):
             for pdf in valid_files:
                 col1, col2 = st.columns([0.8, 0.2])
                 col1.write(f"📄 {pdf.name}")
-                # NEW: A custom Remove button for each file
                 if col2.button("❌ Remove", key=f"remove_{pdf.name}"):
                     st.session_state.ignored_files.append(pdf.name)
-                    st.rerun() # Instantly refreshes the app to hide the removed file
+                    st.rerun() 
     else:
         st.info("All uploaded files have been removed from the queue. Upload more to continue.")
 
@@ -445,24 +460,31 @@ if st.button("Classify and Sort PDFs"):
             setup_directories(output_dir)
             all_results = []
             
-            log_placeholder = st.empty()
+            # --- NEW UI Elements for Processing ---
+            st.divider()
+            quote_placeholder = st.empty()
+            quote_placeholder.markdown(f"#### {random.choice(FUNNY_QUOTES)}") # Show first quote immediately
+            
             progress_bar = st.progress(0)
             
-            # Use valid_files instead of the raw uploaded_pdfs
+            # Tracker to keep the quote timing continuous across multiple files
+            state_tracker = {'last_quote_time': time.time()}
+            
             for idx, uploaded_pdf in enumerate(valid_files):
                 temp_pdf_path = os.path.join(input_dir, uploaded_pdf.name)
                 with open(temp_pdf_path, "wb") as f:
                     f.write(uploaded_pdf.getbuffer())
                 
                 file_results = process_single_pdf(
-                    temp_pdf_path, uploaded_pdf.name, output_dir, model, device, log_placeholder
+                    temp_pdf_path, uploaded_pdf.name, output_dir, model, device, quote_placeholder, state_tracker
                 )
                 all_results.extend(file_results)
                 
                 progress_bar.progress((idx + 1) / len(valid_files))
 
             if all_results:
-                log_placeholder.success("Classification complete! Generating report...")
+                # Clear the quote when done!
+                quote_placeholder.empty() 
                 
                 df = pd.DataFrame(all_results)
                 columns_order = ["Folder Name", "File Name", "Page Number", "Prediction", "Confidence (%)"]
@@ -484,7 +506,6 @@ if st.button("Classify and Sort PDFs"):
                         else:
                             worksheet.set_column(i, i, adjusted_width)
 
-                log_placeholder.info("Zipping files for download...")
                 zip_base_path = os.path.join(tempfile.gettempdir(), "sorted_drawings")
                 shutil.make_archive(zip_base_path, 'zip', output_dir)
                 zip_file_path = f"{zip_base_path}.zip"
@@ -498,4 +519,4 @@ if st.button("Classify and Sort PDFs"):
                         mime="application/zip"
                     )
             else:
-                log_placeholder.error("No pages were successfully processed.")
+                quote_placeholder.error("No pages were successfully processed.")

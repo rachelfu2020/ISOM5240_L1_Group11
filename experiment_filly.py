@@ -43,14 +43,12 @@ IMAGE_TRANSFORMS = transforms.Compose([
 
 
 # --- Streamlit Caching ---
-# We use @st.cache_resource so the model only loads ONCE when the app starts, not every time a user clicks a button.
 @st.cache_resource
 def load_cached_model(model_path):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = models.resnet18(weights=None)
     num_ftrs = model.fc.in_features
     model.fc = nn.Linear(num_ftrs, 5)
-    # Using weights_only=True for safety
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model = model.to(device)
     model.eval()
@@ -58,7 +56,7 @@ def load_cached_model(model_path):
 
 
 def setup_directories(base_dir):
-    """Creates output directories inside the temporary folder."""
+    """Creates output directories inside the designated output folder."""
     drawings_dir = os.path.join(base_dir, 'test_drawings')
     non_drawings_dir = os.path.join(base_dir, 'test_non_drawings')
     os.makedirs(drawings_dir, exist_ok=True)
@@ -136,12 +134,13 @@ def process_single_pdf(pdf_path, filename, base_dir, model, device, log_placehol
                     pdf_page, pred_class, base_dir, base_name, current_page_num
                 )
 
+                # Reordered to make "Folder Name" the first column
                 results.append({
+                    "Folder Name": target_folder,
                     "File Name": filename,
                     "Page Number": current_page_num,
                     "Prediction": pred_class,
-                    "Confidence (%)": conf_percent, 
-                    "Saved To": f"{target_folder}/{saved_name}"
+                    "Confidence (%)": conf_percent
                 })
 
             del batch_images
@@ -159,28 +158,37 @@ st.set_page_config(page_title="Drawing Classifier App", layout="centered")
 st.title("🏗️ PDF Construction Drawing Classifier")
 st.write("Upload your PDFs, and the AI will split, rotate, and sort them into drawings and non-drawings.")
 
-# IMPORTANT: You should put your 'drawing_classifier.pth' in the same folder as this app.py file!
 MODEL_PATH = "drawing_classifier.pth" 
 
-# Check if model exists before proceeding
 if not os.path.exists(MODEL_PATH):
     st.error(f"⚠️ Model file not found! Please ensure '{MODEL_PATH}' is in the same directory as this script.")
     st.stop()
 
-# Load Model
 with st.spinner("Loading AI Model..."):
     model, device = load_cached_model(MODEL_PATH)
 
 # File Uploader
 uploaded_pdfs = st.file_uploader("Upload PDF Files", type=["pdf"], accept_multiple_files=True)
 
+# --- NEW: User Upload Status UI ---
+if uploaded_pdfs:
+    st.success(f"✅ Successfully uploaded {len(uploaded_pdfs)} file(s) ready for processing.")
+    with st.expander("Review uploaded files"):
+        for pdf in uploaded_pdfs:
+            st.write(f"📄 {pdf.name}")
+
 if st.button("Classify and Sort PDFs"):
     if not uploaded_pdfs:
         st.warning("Please upload at least one PDF first.")
     else:
-        # Create a temporary workspace
         with tempfile.TemporaryDirectory() as temp_dir:
-            setup_directories(temp_dir)
+            # --- NEW: Isolate Input and Output folders ---
+            input_dir = os.path.join(temp_dir, "input")
+            output_dir = os.path.join(temp_dir, "output")
+            os.makedirs(input_dir, exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
+            
+            setup_directories(output_dir)
             all_results = []
             
             log_placeholder = st.empty()
@@ -188,25 +196,29 @@ if st.button("Classify and Sort PDFs"):
             
             # 1. Process each uploaded file
             for idx, uploaded_pdf in enumerate(uploaded_pdfs):
-                # Save uploaded file to temp directory
-                temp_pdf_path = os.path.join(temp_dir, uploaded_pdf.name)
+                # Save raw upload to the INPUT folder
+                temp_pdf_path = os.path.join(input_dir, uploaded_pdf.name)
                 with open(temp_pdf_path, "wb") as f:
                     f.write(uploaded_pdf.getbuffer())
                 
-                # Run the model
+                # Run model and save results to the OUTPUT folder
                 file_results = process_single_pdf(
-                    temp_pdf_path, uploaded_pdf.name, temp_dir, model, device, log_placeholder
+                    temp_pdf_path, uploaded_pdf.name, output_dir, model, device, log_placeholder
                 )
                 all_results.extend(file_results)
                 
-                # Update progress bar
                 progress_bar.progress((idx + 1) / len(uploaded_pdfs))
 
-            # 2. Export Excel to the temp folder
+            # 2. Export Excel to the OUTPUT folder
             if all_results:
                 log_placeholder.success("Classification complete! Generating report...")
+                
+                # Ensure the dataframe columns are strictly in this order
                 df = pd.DataFrame(all_results)
-                excel_path = os.path.join(temp_dir, 'pdf_classification_results.xlsx')
+                columns_order = ["Folder Name", "File Name", "Page Number", "Prediction", "Confidence (%)"]
+                df = df[columns_order]
+                
+                excel_path = os.path.join(output_dir, 'pdf_classification_results.xlsx')
                 
                 with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
                     df.to_excel(writer, index=False, sheet_name='Results')
@@ -222,10 +234,10 @@ if st.button("Classify and Sort PDFs"):
                         else:
                             worksheet.set_column(i, i, adjusted_width)
 
-                # 3. Zip the entire temp folder for download
+                # 3. Zip ONLY the OUTPUT folder for download
                 log_placeholder.info("Zipping files for download...")
                 zip_base_path = os.path.join(tempfile.gettempdir(), "sorted_drawings")
-                shutil.make_archive(zip_base_path, 'zip', temp_dir)
+                shutil.make_archive(zip_base_path, 'zip', output_dir)
                 zip_file_path = f"{zip_base_path}.zip"
 
                 # 4. Provide Download Button

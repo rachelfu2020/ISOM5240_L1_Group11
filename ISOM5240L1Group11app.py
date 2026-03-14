@@ -252,6 +252,7 @@ BATCH_SIZE = 8  # Safe for Streamlit Free Tier
 
 CLASS_NAMES = ['drawings_0', 'drawings_180', 'drawings_270', 'drawings_90', 'non_drawings']
 
+# UPDATED: Changed folder names
 FOLDER_MAPPING = {
     'drawings_0': 'drawings',
     'drawings_90': 'drawings',
@@ -291,6 +292,7 @@ def load_cached_model(model_path):
 
 def setup_directories(base_dir):
     """Creates output directories inside the designated output folder."""
+    # UPDATED: Changed folder names
     drawings_dir = os.path.join(base_dir, 'drawings')
     non_drawings_dir = os.path.join(base_dir, 'non_drawings')
     os.makedirs(drawings_dir, exist_ok=True)
@@ -368,7 +370,6 @@ def process_single_pdf(pdf_path, filename, base_dir, model, device, log_placehol
                     pdf_page, pred_class, base_dir, base_name, current_page_num
                 )
 
-                # Reordered to make "Folder Name" the first column
                 results.append({
                     "Folder Name": target_folder,
                     "File Name": filename,
@@ -386,8 +387,12 @@ def process_single_pdf(pdf_path, filename, base_dir, model, device, log_placehol
     return results
 
 
-# --- Streamlit UI ---
+# --- Streamlit UI & Session State ---
 st.set_page_config(page_title="Drawing Classifier App", layout="centered")
+
+# Initialize an ignore list in session state for our custom remove buttons
+if "ignored_files" not in st.session_state:
+    st.session_state.ignored_files = []
 
 st.title("🏗️ PDF Construction Drawing Classifier")
 st.write("Upload your PDFs, and the AI will split, rotate, and sort them into drawings and non-drawings.")
@@ -404,19 +409,34 @@ with st.spinner("Loading AI Model..."):
 # File Uploader
 uploaded_pdfs = st.file_uploader("Upload PDF Files", type=["pdf"], accept_multiple_files=True)
 
-# --- NEW: User Upload Status UI ---
+valid_files = []
+
 if uploaded_pdfs:
-    st.success(f"✅ Successfully uploaded {len(uploaded_pdfs)} file(s) ready for processing.")
-    with st.expander("Review uploaded files"):
-        for pdf in uploaded_pdfs:
-            st.write(f"📄 {pdf.name}")
+    # Cleanup session state: if a user clears the uploader completely, clear the ignore list
+    current_upload_names = [f.name for f in uploaded_pdfs]
+    st.session_state.ignored_files = [f for f in st.session_state.ignored_files if f in current_upload_names]
+    
+    # Filter the uploaded files to exclude anything the user clicked "Remove" on
+    valid_files = [f for f in uploaded_pdfs if f.name not in st.session_state.ignored_files]
+
+    if valid_files:
+        st.success(f"✅ {len(valid_files)} file(s) ready for processing.")
+        with st.expander("Review and Manage Uploaded Files", expanded=True):
+            for pdf in valid_files:
+                col1, col2 = st.columns([0.8, 0.2])
+                col1.write(f"📄 {pdf.name}")
+                # NEW: A custom Remove button for each file
+                if col2.button("❌ Remove", key=f"remove_{pdf.name}"):
+                    st.session_state.ignored_files.append(pdf.name)
+                    st.rerun() # Instantly refreshes the app to hide the removed file
+    else:
+        st.info("All uploaded files have been removed from the queue. Upload more to continue.")
 
 if st.button("Classify and Sort PDFs"):
-    if not uploaded_pdfs:
-        st.warning("Please upload at least one PDF first.")
+    if not valid_files:
+        st.warning("Please upload and keep at least one PDF first.")
     else:
         with tempfile.TemporaryDirectory() as temp_dir:
-            # --- NEW: Isolate Input and Output folders ---
             input_dir = os.path.join(temp_dir, "input")
             output_dir = os.path.join(temp_dir, "output")
             os.makedirs(input_dir, exist_ok=True)
@@ -428,26 +448,22 @@ if st.button("Classify and Sort PDFs"):
             log_placeholder = st.empty()
             progress_bar = st.progress(0)
             
-            # 1. Process each uploaded file
-            for idx, uploaded_pdf in enumerate(uploaded_pdfs):
-                # Save raw upload to the INPUT folder
+            # Use valid_files instead of the raw uploaded_pdfs
+            for idx, uploaded_pdf in enumerate(valid_files):
                 temp_pdf_path = os.path.join(input_dir, uploaded_pdf.name)
                 with open(temp_pdf_path, "wb") as f:
                     f.write(uploaded_pdf.getbuffer())
                 
-                # Run model and save results to the OUTPUT folder
                 file_results = process_single_pdf(
                     temp_pdf_path, uploaded_pdf.name, output_dir, model, device, log_placeholder
                 )
                 all_results.extend(file_results)
                 
-                progress_bar.progress((idx + 1) / len(uploaded_pdfs))
+                progress_bar.progress((idx + 1) / len(valid_files))
 
-            # 2. Export Excel to the OUTPUT folder
             if all_results:
                 log_placeholder.success("Classification complete! Generating report...")
                 
-                # Ensure the dataframe columns are strictly in this order
                 df = pd.DataFrame(all_results)
                 columns_order = ["Folder Name", "File Name", "Page Number", "Prediction", "Confidence (%)"]
                 df = df[columns_order]
@@ -468,13 +484,11 @@ if st.button("Classify and Sort PDFs"):
                         else:
                             worksheet.set_column(i, i, adjusted_width)
 
-                # 3. Zip ONLY the OUTPUT folder for download
                 log_placeholder.info("Zipping files for download...")
                 zip_base_path = os.path.join(tempfile.gettempdir(), "sorted_drawings")
                 shutil.make_archive(zip_base_path, 'zip', output_dir)
                 zip_file_path = f"{zip_base_path}.zip"
 
-                # 4. Provide Download Button
                 st.success("🎉 All files processed and sorted successfully!")
                 with open(zip_file_path, "rb") as f:
                     st.download_button(

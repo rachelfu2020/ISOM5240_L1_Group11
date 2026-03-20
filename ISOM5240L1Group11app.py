@@ -16,7 +16,7 @@ import numpy as np
 from pypdf import PdfReader, PdfWriter
 
 # --- Configuration ---
-BATCH_SIZE = 4 
+BATCH_SIZE = 2 # Lowered to ensure stability during VQA generation
 CLASS_NAMES = ['drawings_0', 'drawings_180', 'drawings_270', 'drawings_90', 'non_drawings']
 FOLDER_MAPPING = {k: ('drawings' if 'drawings' in k else 'non_drawings') for k in CLASS_NAMES}
 ROTATION_FIXES = {'drawings_0': 0, 'drawings_90': 270, 'drawings_180': 180, 'drawings_270': 90, 'non_drawings': 0}
@@ -28,91 +28,77 @@ IMAGE_TRANSFORMS = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-# --- Model Loading ---
 @st.cache_resource
 def load_models(classifier_path):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # 1. Load ResNet Classifier
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, 5)
     model.load_state_dict(torch.load(classifier_path, map_location=device, weights_only=True))
     model.to(device).eval()
     
-    # 2. Load BLIP VQA Model
     vqa_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
     vqa_model = BlipForQuestionAnswering.from_pretrained("Salesforce/blip-vqa-base").to(device).eval()
-    
     return model, vqa_model, vqa_processor, device
 
 def get_vqa_description(image, question, model, processor, device):
-    """Uses BLIP to answer a question about the page image."""
     try:
         inputs = processor(image.convert("RGB"), question, return_tensors="pt").to(device)
         with torch.no_grad():
-            out = model.generate(**inputs, max_new_tokens=50)
+            # Adjusting generation config for better descriptions
+            out = model.generate(**inputs, max_new_tokens=80, min_length=20, num_beams=3)
         return processor.decode(out[0], skip_special_tokens=True)
     except Exception as e:
         return f"Description Error: {e}"
 
 def classify_batch(raw_images, model, device):
-    tensor_list = []
-    for raw_img in raw_images:
-        img_array = np.array(raw_img.convert('RGB'))
-        darkened_img = Image.fromarray(np.min(img_array, axis=2).astype(np.uint8))
-        tensor_list.append(IMAGE_TRANSFORMS(darkened_img))
-
+    tensor_list = [IMAGE_TRANSFORMS(Image.fromarray(np.min(np.array(img.convert('RGB')), axis=2).astype(np.uint8))) for img in raw_images]
     batch_tensor = torch.stack(tensor_list).to(device)
     with torch.no_grad():
         outputs = model(batch_tensor)
         probs = F.softmax(outputs, dim=1)
         confs, indices = torch.max(probs, 1)
-
     return [CLASS_NAMES[i.item()] for i in indices], [c.item() * 100 for c in confs]
 
-# --- Main App UI ---
-st.set_page_config(page_title="AI Drawing Classifier", layout="centered")
-st.title("🏗️ PDF Drawing Classifier & AI Describer")
+# --- UI Setup ---
+st.set_page_config(page_title="AI PDF Reader", layout="wide")
+st.title("🏗️ AI Construction Document Reader")
 
 MODEL_PATH = "drawing_classifier.pth"
 if not os.path.exists(MODEL_PATH):
     st.error(f"⚠️ Model file '{MODEL_PATH}' not found.")
     st.stop()
 
-with st.spinner("Loading AI Models..."):
-    classifier, vqa_model, vqa_proc, device = load_models(MODEL_PATH)
+classifier, vqa_model, vqa_proc, device = load_models(MODEL_PATH)
 
-# --- Step 1: Upload ---
-uploaded_pdfs = st.file_uploader("Upload PDF Files", type=["pdf"], accept_multiple_files=True)
+# --- 1. Upload ---
+uploaded_pdfs = st.file_uploader("Upload PDF Files (e.g., your 22-page set)", type=["pdf"], accept_multiple_files=True)
 
-# --- Step 2: Show Prompt Box ONLY after upload ---
 if uploaded_pdfs:
     st.divider()
-    st.subheader("AI Analysis Settings")
+    col1, col2 = st.columns([1, 1])
     
-    # Optional: Preview the first page of the first PDF to help the user prompt
-    with st.expander("Show Preview of Upload"):
-        first_pdf = uploaded_pdfs[0]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_prev:
-            tmp_prev.write(first_pdf.getbuffer())
-            preview_img = convert_from_path(tmp_prev.name, dpi=50, first_page=1, last_page=1)[0]
-            st.image(preview_img, caption=f"Preview: {first_pdf.name} (Page 1)")
+    with col1:
+        st.subheader("Config & Preview")
+        user_question = st.text_area("What should the AI describe or look for?", "Describe the main architectural elements and notes on this page.", height=100)
+        
+        with st.expander("Preview Page 1"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_prev:
+                tmp_prev.write(uploaded_pdfs[0].getbuffer())
+                preview_img = convert_from_path(tmp_prev.name, dpi=60, first_page=1, last_page=1)[0]
+                st.image(preview_img, use_container_width=True)
 
-    user_question = st.text_input(
-        "VQA Prompt (Ask the AI about the drawings):", 
-        "What is shown in this architectural drawing?"
-    )
-
-    # --- Step 3: Process Button ---
-    if st.button("🚀 Start AI Classification & Description", type="primary"):
+    # --- 2. Processing ---
+    if st.button("🔍 Analyze & Describe All Pages", type="primary", use_container_width=True):
+        with col2:
+            st.subheader("AI Live Feed")
+            log_container = st.container(border=True)
+            progress_bar = st.progress(0)
+            
+        all_results = []
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = os.path.join(temp_dir, "output")
             os.makedirs(os.path.join(output_dir, 'drawings'), exist_ok=True)
             os.makedirs(os.path.join(output_dir, 'non_drawings'), exist_ok=True)
-            
-            all_results = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
 
             for f_idx, uploaded_pdf in enumerate(uploaded_pdfs):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -123,61 +109,4 @@ if uploaded_pdfs:
                 total_pages = len(reader.pages)
                 
                 for start in range(1, total_pages + 1, BATCH_SIZE):
-                    end = min(start + BATCH_SIZE - 1, total_pages)
-                    status_text.info(f"Processing {uploaded_pdf.name}: Pages {start}-{end} of {total_pages}")
-                    
-                    imgs = convert_from_path(pdf_path, dpi=72, first_page=start, last_page=end)
-                    preds, confs = classify_batch(imgs, classifier, device)
-
-                    for i, (pred, conf) in enumerate(zip(preds, confs)):
-                        curr_pg = start + i
-                        writer = PdfWriter()
-                        page_obj = reader.pages[curr_pg - 1]
-                        
-                        if ROTATION_FIXES[pred] != 0:
-                            page_obj.rotate(ROTATION_FIXES[pred])
-                        writer.add_page(page_obj)
-
-                        # Describe ONLY if it's a drawing
-                        description = "N/A (Non-drawing)"
-                        if "drawings" in FOLDER_MAPPING[pred]:
-                            description = get_vqa_description(imgs[i], user_question, vqa_model, vqa_proc, device)
-
-                        folder = FOLDER_MAPPING[pred]
-                        out_name = f"{uploaded_pdf.name}_p{curr_pg}.pdf"
-                        with open(os.path.join(output_dir, folder, out_name), "wb") as f_out:
-                            writer.write(f_out)
-
-                        all_results.append({
-                            "File Name": uploaded_pdf.name, 
-                            "Page": curr_pg, 
-                            "Category": FOLDER_MAPPING[pred],
-                            "Orientation": pred.replace('drawings_', 'rotated '),
-                            "AI Description": description,
-                            "Confidence (%)": f"{conf:.2f}"
-                        })
-
-                progress_bar.progress((f_idx + 1) / len(uploaded_pdfs))
-
-            # --- Results Output ---
-            if all_results:
-                status_text.success(f"Successfully processed {len(uploaded_pdfs)} file(s)!")
-                
-                df = pd.DataFrame(all_results)
-                report_path = os.path.join(output_dir, 'classification_report.xlsx')
-                df.to_excel(report_path, index=False)
-                
-                zip_base = os.path.join(tempfile.gettempdir(), "sorted_drawings")
-                shutil.make_archive(zip_base, 'zip', output_dir)
-                
-                with open(f"{zip_base}.zip", "rb") as f:
-                    st.download_button(
-                        label="⬇️ Download Sorted PDFs & Excel Report",
-                        data=f,
-                        file_name="ai_processed_drawings.zip",
-                        mime="application/zip",
-                        use_container_width=True
-                    )
-                st.dataframe(df) # Show a quick table of the results
-else:
-    st.info("Please upload one or more PDF files to begin.")
+                    end = min(

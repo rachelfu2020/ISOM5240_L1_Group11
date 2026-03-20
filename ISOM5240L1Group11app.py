@@ -63,3 +63,121 @@ def classify_batch(raw_images, model, device):
         tensor_list.append(IMAGE_TRANSFORMS(darkened_img))
 
     batch_tensor = torch.stack(tensor_list).to(device)
+    with torch.no_grad():
+        outputs = model(batch_tensor)
+        probs = F.softmax(outputs, dim=1)
+        confs, indices = torch.max(probs, 1)
+
+    return [CLASS_NAMES[i.item()] for i in indices], [c.item() * 100 for c in confs]
+
+# --- Main App UI ---
+st.set_page_config(page_title="AI Drawing Classifier", layout="centered")
+st.title("🏗️ PDF Drawing Classifier & AI Describer")
+
+MODEL_PATH = "drawing_classifier.pth"
+if not os.path.exists(MODEL_PATH):
+    st.error(f"⚠️ Model file '{MODEL_PATH}' not found.")
+    st.stop()
+
+with st.spinner("Loading AI Models..."):
+    classifier, vqa_model, vqa_proc, device = load_models(MODEL_PATH)
+
+# --- Step 1: Upload ---
+uploaded_pdfs = st.file_uploader("Upload PDF Files", type=["pdf"], accept_multiple_files=True)
+
+# --- Step 2: Show Prompt Box ONLY after upload ---
+if uploaded_pdfs:
+    st.divider()
+    st.subheader("AI Analysis Settings")
+    
+    # Optional: Preview the first page of the first PDF to help the user prompt
+    with st.expander("Show Preview of Upload"):
+        first_pdf = uploaded_pdfs[0]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_prev:
+            tmp_prev.write(first_pdf.getbuffer())
+            preview_img = convert_from_path(tmp_prev.name, dpi=50, first_page=1, last_page=1)[0]
+            st.image(preview_img, caption=f"Preview: {first_pdf.name} (Page 1)")
+
+    user_question = st.text_input(
+        "VQA Prompt (Ask the AI about the drawings):", 
+        "What is shown in this architectural drawing?"
+    )
+
+    # --- Step 3: Process Button ---
+    if st.button("🚀 Start AI Classification & Description", type="primary"):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = os.path.join(temp_dir, "output")
+            os.makedirs(os.path.join(output_dir, 'drawings'), exist_ok=True)
+            os.makedirs(os.path.join(output_dir, 'non_drawings'), exist_ok=True)
+            
+            all_results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for f_idx, uploaded_pdf in enumerate(uploaded_pdfs):
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(uploaded_pdf.getbuffer())
+                    pdf_path = tmp.name
+
+                reader = PdfReader(pdf_path)
+                total_pages = len(reader.pages)
+                
+                for start in range(1, total_pages + 1, BATCH_SIZE):
+                    end = min(start + BATCH_SIZE - 1, total_pages)
+                    status_text.info(f"Processing {uploaded_pdf.name}: Pages {start}-{end} of {total_pages}")
+                    
+                    imgs = convert_from_path(pdf_path, dpi=72, first_page=start, last_page=end)
+                    preds, confs = classify_batch(imgs, classifier, device)
+
+                    for i, (pred, conf) in enumerate(zip(preds, confs)):
+                        curr_pg = start + i
+                        writer = PdfWriter()
+                        page_obj = reader.pages[curr_pg - 1]
+                        
+                        if ROTATION_FIXES[pred] != 0:
+                            page_obj.rotate(ROTATION_FIXES[pred])
+                        writer.add_page(page_obj)
+
+                        # Describe ONLY if it's a drawing
+                        description = "N/A (Non-drawing)"
+                        if "drawings" in FOLDER_MAPPING[pred]:
+                            description = get_vqa_description(imgs[i], user_question, vqa_model, vqa_proc, device)
+
+                        folder = FOLDER_MAPPING[pred]
+                        out_name = f"{uploaded_pdf.name}_p{curr_pg}.pdf"
+                        with open(os.path.join(output_dir, folder, out_name), "wb") as f_out:
+                            writer.write(f_out)
+
+                        all_results.append({
+                            "File Name": uploaded_pdf.name, 
+                            "Page": curr_pg, 
+                            "Category": FOLDER_MAPPING[pred],
+                            "Orientation": pred.replace('drawings_', 'rotated '),
+                            "AI Description": description,
+                            "Confidence (%)": f"{conf:.2f}"
+                        })
+
+                progress_bar.progress((f_idx + 1) / len(uploaded_pdfs))
+
+            # --- Results Output ---
+            if all_results:
+                status_text.success(f"Successfully processed {len(uploaded_pdfs)} file(s)!")
+                
+                df = pd.DataFrame(all_results)
+                report_path = os.path.join(output_dir, 'classification_report.xlsx')
+                df.to_excel(report_path, index=False)
+                
+                zip_base = os.path.join(tempfile.gettempdir(), "sorted_drawings")
+                shutil.make_archive(zip_base, 'zip', output_dir)
+                
+                with open(f"{zip_base}.zip", "rb") as f:
+                    st.download_button(
+                        label="⬇️ Download Sorted PDFs & Excel Report",
+                        data=f,
+                        file_name="ai_processed_drawings.zip",
+                        mime="application/zip",
+                        use_container_width=True
+                    )
+                st.dataframe(df) # Show a quick table of the results
+else:
+    st.info("Please upload one or more PDF files to begin.")

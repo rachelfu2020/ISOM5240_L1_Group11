@@ -109,4 +109,53 @@ if uploaded_pdfs:
                 total_pages = len(reader.pages)
                 
                 for start in range(1, total_pages + 1, BATCH_SIZE):
-                    end = min(
+                    end = min(start + BATCH_SIZE - 1, total_pages)
+                    imgs = convert_from_path(pdf_path, dpi=72, first_page=start, last_page=end)
+                    preds, confs = classify_batch(imgs, classifier, device)
+
+                    for i, (pred, conf) in enumerate(zip(preds, confs)):
+                        curr_pg = start + i
+                        
+                        # separation logic
+                        writer = PdfWriter()
+                        page_obj = reader.pages[curr_pg - 1]
+                        if ROTATION_FIXES[pred] != 0: page_obj.rotate(ROTATION_FIXES[pred])
+                        writer.add_page(page_obj)
+
+                        # VQA Logic
+                        is_drawing = "drawings" in FOLDER_MAPPING[pred]
+                        description = get_vqa_description(imgs[i], user_question, vqa_model, vqa_proc, device) if is_drawing else "Text-heavy page (Non-drawing)"
+
+                        # Live Display
+                        with log_container:
+                            st.markdown(f"**Page {curr_pg}:** {description}")
+
+                        folder = FOLDER_MAPPING[pred]
+                        out_name = f"{uploaded_pdf.name}_p{curr_pg}.pdf"
+                        with open(os.path.join(output_dir, folder, out_name), "wb") as f_out:
+                            writer.write(f_out)
+
+                        all_results.append({
+                            "Page": curr_pg, "File": uploaded_pdf.name, 
+                            "Category": folder, "AI Description": description
+                        })
+
+                progress_bar.progress((f_idx + 1) / len(uploaded_pdfs))
+
+        # --- 3. Final Summary & Download ---
+        st.divider()
+        st.header("📊 Final Analysis Report")
+        df = pd.DataFrame(all_results)
+        
+        tab1, tab2 = st.tabs(["Summary Table", "Download Options"])
+        with tab1:
+            st.dataframe(df, use_container_width=True)
+            
+        with tab2:
+            zip_base = os.path.join(tempfile.gettempdir(), "ai_pdf_results")
+            shutil.make_archive(zip_base, 'zip', output_dir)
+            with open(f"{zip_base}.zip", "rb") as f:
+                st.download_button("📦 Download Sorted PDFs & Full Excel Report", f, "processed_drawings.zip", use_container_width=True)
+
+else:
+    st.info("Upload your construction set to start the AI analysis.")

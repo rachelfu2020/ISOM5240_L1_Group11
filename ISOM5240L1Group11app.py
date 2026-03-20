@@ -59,7 +59,7 @@ def classify_batch(raw_images, model, device):
     return [CLASS_NAMES[i.item()] for i in indices], [c.item() * 100 for c in confs]
 
 # --- UI Setup ---
-st.set_page_config(page_title="AI PDF Drawing Reader", layout="wide")
+st.set_page_config(page_title="AI PDF Drawing Reader", layout="centered")
 st.title("🏗️ AI Construction Document Reader")
 
 MODEL_PATH = "drawing_classifier.pth"
@@ -73,24 +73,20 @@ uploaded_pdfs = st.file_uploader("Upload PDF Files", type=["pdf"], accept_multip
 
 if uploaded_pdfs:
     st.divider()
-    col1, col2 = st.columns([1, 1.5])
+    st.subheader("AI Settings")
     
-    with col1:
-        st.subheader("AI Settings")
-        user_question = st.text_area("Question for the AI:", "What type of architectural plan is this and what are the key features?", height=100)
-        
-        with st.expander("Preview Page 1"):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_prev:
-                tmp_prev.write(uploaded_pdfs[0].getbuffer())
-                preview_img = convert_from_path(tmp_prev.name, dpi=60, first_page=1, last_page=1)[0]
-                st.image(preview_img, use_container_width=True)
+    with st.expander("Preview Page 1"):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_prev:
+            tmp_prev.write(uploaded_pdfs[0].getbuffer())
+            preview_img = convert_from_path(tmp_prev.name, dpi=60, first_page=1, last_page=1)[0]
+            st.image(preview_img, use_container_width=True)
 
-    if st.button("🔍 Analyze & Describe All Pages", type="primary", use_container_width=True):
+    user_question = st.text_area("Question for the AI:", "What type of architectural plan is this and what are the key features?", height=100)
+
+    if st.button("🔍 Process & Generate Report", type="primary", use_container_width=True):
         all_results = []
-        with col2:
-            st.subheader("AI Analysis Feed")
-            log_container = st.container(height=400, border=True)
-            progress_bar = st.progress(0)
+        progress_bar = st.progress(0)
+        status_text = st.empty()
 
         # START TEMPORARY DIRECTORY
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -108,25 +104,24 @@ if uploaded_pdfs:
                 
                 for start in range(1, total_pages + 1, BATCH_SIZE):
                     end = min(start + BATCH_SIZE - 1, total_pages)
+                    status_text.info(f"AI is reading {uploaded_pdf.name}... (Pages {start}-{end} of {total_pages})")
+                    
                     imgs = convert_from_path(pdf_path, dpi=72, first_page=start, last_page=end)
                     preds, confs = classify_batch(imgs, classifier, device)
 
                     for i, (pred, conf) in enumerate(zip(preds, confs)):
                         curr_pg = start + i
                         
-                        # separation & rotation
+                        # separation & rotation logic
                         writer = PdfWriter()
                         page_obj = reader.pages[curr_pg - 1]
                         if ROTATION_FIXES[pred] != 0: 
                             page_obj.rotate(ROTATION_FIXES[pred])
                         writer.add_page(page_obj)
 
-                        # VQA Description
+                        # Background VQA Processing (No UI Output)
                         is_drawing = "drawings" in FOLDER_MAPPING[pred]
                         description = get_vqa_description(imgs[i], user_question, vqa_model, vqa_proc, device) if is_drawing else "Non-drawing page."
-
-                        with log_container:
-                            st.write(f"📄 **Page {curr_pg}:** {description}")
 
                         folder = FOLDER_MAPPING[pred]
                         out_name = f"{uploaded_pdf.name}_p{curr_pg}.pdf"
@@ -134,28 +129,38 @@ if uploaded_pdfs:
                             writer.write(f_out)
 
                         all_results.append({
-                            "Page": curr_pg, "File": uploaded_pdf.name, 
-                            "Category": folder, "AI Description": description,
-                            "Conf (%)": f"{conf:.1f}"
+                            "Page Number": curr_pg, 
+                            "Original File": uploaded_pdf.name, 
+                            "Category": folder, 
+                            "AI Analysis": description,
+                            "AI Confidence (%)": f"{conf:.1f}"
                         })
 
                 progress_bar.progress((f_idx + 1) / len(uploaded_pdfs))
 
-            # CRITICAL: Zip must happen INSIDE the 'with temp_dir' block
+            # Finalizing the package
             if all_results:
+                status_text.empty()
                 df = pd.DataFrame(all_results)
-                df.to_excel(os.path.join(output_dir, 'report.xlsx'), index=False)
                 
-                zip_base = os.path.join(temp_dir, "ai_final_results")
+                # Save Excel Report into the ZIP folder
+                report_path = os.path.join(output_dir, 'AI_Analysis_Report.xlsx')
+                df.to_excel(report_path, index=False)
+                
+                # Zip the entire output directory
+                zip_base = os.path.join(temp_dir, "final_package")
                 shutil.make_archive(zip_base, 'zip', output_dir)
-                zip_file_path = f"{zip_base}.zip"
-
-                with open(zip_file_path, "rb") as f:
-                    st.divider()
-                    st.success("✅ Analysis Complete!")
-                    st.download_button("📦 Download Sorted PDFs & AI Report", f, "processed_drawings.zip", use_container_width=True)
-                    st.dataframe(df, use_container_width=True)
-        # END TEMPORARY DIRECTORY
+                
+                with open(f"{zip_base}.zip", "rb") as f:
+                    st.success("✅ All pages analyzed and sorted!")
+                    st.download_button(
+                        label="📦 Download Sorted PDFs & AI Report",
+                        data=f,
+                        file_name="Architectural_Analysis_Package.zip",
+                        mime="application/zip",
+                        use_container_width=True
+                    )
+                    st.info("The downloaded ZIP contains separate folders for drawings and the full 'AI_Analysis_Report.xlsx' with page descriptions.")
 
 else:
-    st.info("Upload your construction set to start the AI analysis.")
+    st.info("Upload your construction documents to begin.")

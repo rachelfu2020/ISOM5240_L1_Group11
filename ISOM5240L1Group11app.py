@@ -41,7 +41,6 @@ uploaded_pdfs = st.file_uploader(
     "Upload PDF files containing CAD drawings", 
     type=['pdf'],
     accept_multiple_files=True,
-    max_uploaded_files=max_files,
     help="Supports multiple PDFs - will extract all drawings"
 )
 

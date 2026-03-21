@@ -99,8 +99,6 @@ def generate_20word_summary(texts, sentiments):
         words = summary.split()
     while len(words) < 20:
         words.extend(["analysis", "complete"])
-
-return " ".join(words[:20])
     
     return " ".join(words[:20])
 

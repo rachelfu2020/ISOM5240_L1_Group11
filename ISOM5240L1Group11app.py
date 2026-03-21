@@ -32,13 +32,13 @@ def load_ocr():
 reader = load_ocr()
 
 # Sidebar for settings
-st.sidebar.header("⚙️ Settings")
+st.sidebar.header("Settings")
 max_files = st.sidebar.slider("Max PDF files", 1, 5, 2)
 target_words = 20  # Fixed requirement
 
 # === STEP 1: PDF UPLOAD ===
 uploaded_pdfs = st.file_uploader(
-    "📁 Upload PDF files containing CAD drawings", 
+    "Upload PDF files containing CAD drawings", 
     type=['pdf'],
     accept_multiple_files=True,
     max_uploaded_files=max_files,

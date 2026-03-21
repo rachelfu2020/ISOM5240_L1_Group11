@@ -36,6 +36,101 @@ st.sidebar.header("Settings")
 max_files = st.sidebar.slider("Max PDF files", 1, 5, 2)
 target_words = 20  # Fixed requirement
 
+# === UTILITY FUNCTIONS ===
+def detect_cad_drawing(img):
+    """Simple heuristic: high contrast + regular dimensions = drawing"""
+    img_gray = img.convert('L')
+    contrast = img_gray.getextrema()
+    
+    # CAD drawings typically have high contrast (black lines on white)
+    confidence = (contrast[1] - contrast[0]) / 255.0
+    return {'confidence': min(confidence * 100, 95)}
+
+def extract_engineering_terms(text):
+    """Extract CAD/engineering specific terms"""
+    engineering_keywords = [
+        'dimension', 'scale', 'tolerance', 'material', 'diameter', 
+        'length', 'width', 'height', 'bearing', 'shaft', 'tolerance',
+        'rev', 'dwg', 'sheet', 'section', 'view', 'detail'
+    ]
+    
+    words = re.findall(r'\b\w+\b', text.lower())
+    found_terms = [w for w in words if w in engineering_keywords]
+    return found_terms
+
+def analyze_engineering_sentiment(terms):
+    """Simple sentiment scoring for engineering terms"""
+    positive_terms = ['precision', 'quality', 'excellent', 'robust']
+    negative_terms = ['defect', 'error', 'crack', 'failure']
+    
+    score = 0
+    for term in terms:
+        if term in positive_terms: score += 1
+        if term in negative_terms: score -= 1
+    
+    return {
+        'compound': score / max(len(terms), 1),
+        'positive': len([t for t in terms if t in positive_terms]) / max(len(terms), 1),
+        'negative': len([t for t in terms if t in negative_terms]) / max(len(terms), 1)
+    }
+
+def generate_20word_summary(texts, sentiments):
+    """Generate exactly 20-word summary"""
+    summary = "CAD drawings show engineering designs with "
+    
+    # Count most common terms
+    all_terms = []
+    for text in texts:
+        all_terms.extend(text['engineering_terms'])
+    
+    common_terms = Counter(all_terms).most_common(5)
+    
+    # Build summary
+    summary += ", ".join([term for term, count in common_terms[:3]])
+    summary += f" dominating. Average sentiment score: {sum(s['compound'] for s in sentiments)/len(sentiments):.2f}."
+    
+    # Pad/truncate to exactly 20 words
+    words = summary.split()
+    if len(words) > 20:
+        words = words[:20]
+    else:
+        words.extend(["analysis", "complete"] * (20 - len(words)) // 2)
+    
+    return " ".join(words[:20])
+
+def show_results_dashboard(texts, sentiments):
+    """Display comprehensive results"""
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📊 OCR Results Summary")
+        df = pd.DataFrame(texts)
+        st.dataframe(df[['source', 'word_count', 'engineering_terms']].head())
+        
+        # Term frequency chart
+        all_terms = []
+        for text in texts:
+            all_terms.extend(text['engineering_terms'])
+        term_counts = Counter(all_terms).most_common(10)
+        
+        fig = px.bar(x=[term for term, count in term_counts],
+                    y=[count for term, count in term_counts],
+                    title="Top Engineering Terms")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("😊 Sentiment Analysis")
+        avg_sentiment = sum(s['compound'] for s in sentiments) / len(sentiments)
+        st.metric("Overall Sentiment Score", f"{avg_sentiment:.3f}")
+        
+        # Sentiment distribution
+        sentiment_df = pd.DataFrame(sentiments)
+        fig = px.pie(values=['Positive', 'Negative'], 
+                    names=['✅', '❌'],
+                    title="Sentiment Distribution")
+        st.plotly_chart(fig, use_container_width=True)
+
+
 # === STEP 1: PDF UPLOAD ===
 uploaded_pdfs = st.file_uploader(
     "Upload PDF files containing CAD drawings", 
@@ -155,100 +250,6 @@ if uploaded_pdfs:
         
         # === RESULTS DASHBOARD ===
         show_results_dashboard(all_texts, sentiments)
-
-# === UTILITY FUNCTIONS ===
-def detect_cad_drawing(img):
-    """Simple heuristic: high contrast + regular dimensions = drawing"""
-    img_gray = img.convert('L')
-    contrast = img_gray.getextrema()
-    
-    # CAD drawings typically have high contrast (black lines on white)
-    confidence = (contrast[1] - contrast[0]) / 255.0
-    return {'confidence': min(confidence * 100, 95)}
-
-def extract_engineering_terms(text):
-    """Extract CAD/engineering specific terms"""
-    engineering_keywords = [
-        'dimension', 'scale', 'tolerance', 'material', 'diameter', 
-        'length', 'width', 'height', 'bearing', 'shaft', 'tolerance',
-        'rev', 'dwg', 'sheet', 'section', 'view', 'detail'
-    ]
-    
-    words = re.findall(r'\b\w+\b', text.lower())
-    found_terms = [w for w in words if w in engineering_keywords]
-    return found_terms
-
-def analyze_engineering_sentiment(terms):
-    """Simple sentiment scoring for engineering terms"""
-    positive_terms = ['precision', 'quality', 'excellent', 'robust']
-    negative_terms = ['defect', 'error', 'crack', 'failure']
-    
-    score = 0
-    for term in terms:
-        if term in positive_terms: score += 1
-        if term in negative_terms: score -= 1
-    
-    return {
-        'compound': score / max(len(terms), 1),
-        'positive': len([t for t in terms if t in positive_terms]) / max(len(terms), 1),
-        'negative': len([t for t in terms if t in negative_terms]) / max(len(terms), 1)
-    }
-
-def generate_20word_summary(texts, sentiments):
-    """Generate exactly 20-word summary"""
-    summary = "CAD drawings show engineering designs with "
-    
-    # Count most common terms
-    all_terms = []
-    for text in texts:
-        all_terms.extend(text['engineering_terms'])
-    
-    common_terms = Counter(all_terms).most_common(5)
-    
-    # Build summary
-    summary += ", ".join([term for term, count in common_terms[:3]])
-    summary += f" dominating. Average sentiment score: {sum(s['compound'] for s in sentiments)/len(sentiments):.2f}."
-    
-    # Pad/truncate to exactly 20 words
-    words = summary.split()
-    if len(words) > 20:
-        words = words[:20]
-    else:
-        words.extend(["analysis", "complete"] * (20 - len(words)) // 2)
-    
-    return " ".join(words[:20])
-
-def show_results_dashboard(texts, sentiments):
-    """Display comprehensive results"""
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📊 OCR Results Summary")
-        df = pd.DataFrame(texts)
-        st.dataframe(df[['source', 'word_count', 'engineering_terms']].head())
-        
-        # Term frequency chart
-        all_terms = []
-        for text in texts:
-            all_terms.extend(text['engineering_terms'])
-        term_counts = Counter(all_terms).most_common(10)
-        
-        fig = px.bar(x=[term for term, count in term_counts],
-                    y=[count for term, count in term_counts],
-                    title="Top Engineering Terms")
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        st.subheader("😊 Sentiment Analysis")
-        avg_sentiment = sum(s['compound'] for s in sentiments) / len(sentiments)
-        st.metric("Overall Sentiment Score", f"{avg_sentiment:.3f}")
-        
-        # Sentiment distribution
-        sentiment_df = pd.DataFrame(sentiments)
-        fig = px.pie(values=['Positive', 'Negative'], 
-                    names=['✅', '❌'],
-                    title="Sentiment Distribution")
-        st.plotly_chart(fig, use_container_width=True)
 
 # Footer downloads
 if 'summary' in st.session_state:

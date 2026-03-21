@@ -97,7 +97,7 @@ def generate_20word_summary(texts, sentiments):
     else:
         # Pad/truncate to exactly 20 words
         words = summary.split()
-        while len(words) < 20:
+    while len(words) < 20:
         words.extend(["analysis", "complete"])
 
 return " ".join(words[:20])

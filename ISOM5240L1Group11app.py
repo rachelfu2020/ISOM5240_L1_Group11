@@ -220,7 +220,7 @@ if uploaded_pdfs:
         with st.spinner("Extracting text from all drawings..."):
             all_texts = []
             for drawing in all_drawings:
-            result = reader.readtext(np.array(drawing['image']), detail=0)
+                result = reader.readtext(np.array(drawing['image']), detail=0)
                 full_text = ' '.join(result)
                 engineering_terms = extract_engineering_terms(full_text)
                 

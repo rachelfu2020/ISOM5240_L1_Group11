@@ -11,3 +11,9 @@ pdf2image
 pypdf
 numpy
 xlsxwriter
+#Below added by rachel on 22Mar to test the OCR scenario
+PyMuPDF
+easyocr
+pandas
+plotly
+PyPDF2
